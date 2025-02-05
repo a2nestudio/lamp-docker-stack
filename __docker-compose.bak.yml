@@ -1,0 +1,42 @@
+services:
+
+  wordpress:
+    image: wordpress
+    container_name: wp_general
+    # restart: always
+    ports:
+      - 8080:80
+    environment:
+      WORDPRESS_DB_HOST: db
+      WORDPRESS_DB_USER: admin
+      WORDPRESS_DB_PASSWORD: pass
+      WORDPRESS_DB_NAME: wp_db
+    volumes:
+      - ./wp:/var/www/html
+
+  db:
+    image: mysql:8.0
+    container_name: db_general
+    # restart: always
+    ports:
+      - 33061:3306
+    environment:
+      MYSQL_DATABASE: wp_db
+      MYSQL_USER: admin
+      MYSQL_PASSWORD: pass
+      MYSQL_RANDOM_ROOT_PASSWORD: '1'
+    #volumes:
+    # - ./db:/var/lib/mysql
+  phpmyadmin:
+    image: phpmyadmin/phpmyadmin
+    container_name: phpmyadmin_general
+    ports:
+      - "8081:80" # phpMyAdmin estará disponible en http://localhost:8081
+    environment:
+      PMA_HOST: db
+      PMA_USER: admin
+      PMA_PASSWORD: pass
+    # restart: always
+volumes:
+  wordpress:
+  #db:

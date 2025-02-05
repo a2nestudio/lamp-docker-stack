@@ -1,0 +1,33 @@
+services:
+
+  wordpress:
+    image: wordpress
+    container_name: wp_bartolome
+    restart: always
+    ports:
+      - 8080:80
+    environment:
+      WORDPRESS_DB_HOST: db
+      WORDPRESS_DB_USER: admin
+      WORDPRESS_DB_PASSWORD: pass
+      WORDPRESS_DB_NAME: db_musico
+    volumes:
+      - ./wordpress:/var/www/html
+
+  db:
+    image: mysql:8.0
+    container_name: db_bartolome
+    restart: always
+    ports:
+      - 33061:3306
+    environment:
+      MYSQL_DATABASE: db_musico
+      MYSQL_USER: admin
+      MYSQL_PASSWORD: pass
+      MYSQL_RANDOM_ROOT_PASSWORD: '1'
+    volumes:
+      - ./db:/var/lib/mysql
+
+volumes:
+  wordpress:
+  db:
