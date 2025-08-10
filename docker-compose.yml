@@ -11,6 +11,8 @@ services:
       WORDPRESS_DB_USER: admin
       WORDPRESS_DB_PASSWORD: pass
       WORDPRESS_DB_NAME: wp_db
+      WORDPRESS_CONFIG_EXTRA: |
+        define('FS_METHOD', 'direct');
     volumes:
       - ./wp:/var/www/html
 

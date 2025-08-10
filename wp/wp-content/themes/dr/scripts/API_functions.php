@@ -1,9 +1,23 @@
 <?php
+
 /**
- * API Functions for Piña Estudio WordPress Theme
+ * API Functions for WordPress Theme
  * 
  * This file contains all the REST API endpoints and functions for the theme.
- * It includes utilities and custom API routes for pages and posts.
+ * It includes security measures, utilities and custom API routes.
+ * 
+ * Available Routes:
+ * - GET /wp-json/api/v1/pages/{slug} - Retrieve page data by slug
+ * - GET /wp-json/api/v1/eventos/{slug} - Retrieve event data by slug
+ * 
+ * Security Features:
+ * - Blocks WordPress default API endpoints (/wp-json/wp/v2/*)
+ * - Blocks index.php API access routes
+ * - Only allows specific custom endpoints
+ * 
+ * @package WordPress
+ * @subpackage Custom_API
+ * @since 1.0.0
  */
 
 // Utils
@@ -14,80 +28,158 @@ include('Utils.php');
  * 
  * This hook intercepts requests to the root API endpoints and returns a 404 status
  * to hide the default WordPress API routes for security purposes.
+ * Allows specific custom endpoints to function while blocking base routes.
  * 
  * @param mixed           $result  Response to replace the requested version with
  * @param WP_REST_Server  $server  Server instance
  * @param WP_REST_Request $request Request used to generate the response
  * @return WP_REST_Response
  */
-add_action( 'rest_pre_dispatch', function( $result, $server, $request ) {
-    if($request->get_route() == '/' || $request->get_route() == '/wp-json'){ 
+add_action('rest_pre_dispatch', function ($result, $server, $request) {
+    $route = $request->get_route();
+
+    // Lista de rutas base que queremos bloquear
+    $blocked_routes = [
+        '/',
+        '/wp-json',
+        '/wp-json/wp/v2',
+        '/wp-json/wp/v2/',
+        '/api/v1',
+        '/api/v2'
+    ];
+
+    // Lista de patrones de rutas permitidas (usando regex)
+    $allowed_patterns = [
+        '/^\/api\/v1\/pages\/[A-Za-z0-9\-\s]+$/',
+        '/^\/api\/v1\/posts\/[A-Za-z0-9\-\s,]+$/',
+        '/^\/api\/v1\/evento\/[A-Za-z0-9\-\s,]+$/'
+    ];
+
+    // Verificar si la ruta está en la lista de bloqueadas
+    if (in_array($route, $blocked_routes)) {
         $result = new WP_REST_Response();
         $result->set_status(404);
+        return $result;
     }
-    if($request->get_route() == '/api/v1'){   
-        $result = new WP_REST_Response();
-        $result->set_status(404);
+
+    // Bloquear todas las rutas de WordPress por defecto excepto las permitidas
+    if (strpos($route, '/wp-json/wp/') === 0 || strpos($route, '/wp/v2') !== false) {
+        // Verificar si la ruta coincide con algún patrón permitido
+        $is_allowed = false;
+        foreach ($allowed_patterns as $pattern) {
+            if (preg_match($pattern, $route)) {
+                $is_allowed = true;
+                break;
+            }
+        }
+
+        if (!$is_allowed) {
+            $result = new WP_REST_Response();
+            $result->set_status(404);
+            return $result;
+        }
     }
+
     return $result;
-}, 10, 3 );
+}, 10, 3);
+
+/**
+ * Additional security layer - Block WordPress default API via authentication errors
+ * 
+ * This provides an extra layer of protection by blocking access at the authentication level
+ * for WordPress default API routes, even when accessed via index.php
+ */
+add_filter('rest_authentication_errors', function ($result) {
+    // Si ya hay un error, no hacer nada
+    if (is_wp_error($result)) {
+        return $result;
+    }
+
+    // Obtener la URL solicitada
+    $request_uri = $_SERVER['REQUEST_URI'] ?? '';
+
+    // Patrones de URLs a bloquear
+    $blocked_patterns = [
+        '/wp-json/wp/v2',
+        '/index.php/wp-json/wp/v2',
+        '/?rest_route=/wp/v2'
+    ];
+
+    // Verificar si algún patrón coincide
+    foreach ($blocked_patterns as $pattern) {
+        if (strpos($request_uri, $pattern) !== false) {
+            return new WP_Error(
+                'rest_forbidden',
+                'API access denied',
+                array('status' => 404)
+            );
+        }
+    }
+
+    return $result;
+});
+
 //////////////////////////////
 /**
  * Get page data by slug
  * 
- * Retrieves a single page's data including ACF fields, media URLs and contact information
- * based on the provided slug.
+ * Retrieves a single page's data from WordPress pages by slug.
+ * Returns basic page information including ID, content, title, etc.
  * 
  * @param WP_REST_Request $req Request object containing the page slug
  * @return WP_REST_Response Response object with page data or 404 if not found
+ * 
+ * @since 1.0.0
+ * @example GET /wp-json/api/v1/pages/home
+ * @example GET /wp-json/api/v1/pages/about-us
  */
-function api_page_by_slug(WP_REST_Request $req) {
+function api_page_by_slug(WP_REST_Request $req)
+{
     $params = [];
     if (isset($req)) {
         $params = $req->get_params();
     }
+    // Buscar la página por slug
     $post = get_posts(array(
         'name' => $params['slug'],
         'post_type' => 'page',
+        'post_status' => 'publish',
+        'numberposts' => 1,
+        'no_found_rows' => true
     ));
+
+    // Validar que se proporcionó un slug
     if (empty($params['slug'])) {
         return new WP_REST_Response('Sin datos', 404, array('X-Powered-By' => '|=|'));
     }
 
+    // Validar que la página existe
     if (empty($post)) {
         return new WP_REST_Response('Sin datos', 404, array('X-Powered-By' => '|=|'));
-    } // ----------------------------
-    // Solo devolver ciertos campos
-    // ACF data
-    $tipo = get_field('tipo', $post[0]->ID);
-    $media = get_field($tipo, $post[0]->ID);
-    $mediav = get_field($tipo . '_vertical', $post[0]->ID);
-    // Construccion srcset
-    $url = createSrc($media);
-    $urlv = createSrc($mediav);
-    // Contactos
-    // ---------
+    }
+
+    // Preparar datos de respuesta básicos
     $fposts = array(
-        'title' => get_field('titulo', $post[0]->ID),
-        'sub-title' => get_field('sub_titulo', $post[0]->ID),
         'ID' => $post[0]->ID,
+        'title' => $post[0]->post_title,
         'content' => $post[0]->post_content,
-        'tipo' => $tipo,
-        'url' => $url['url'],
-        'urlv' => $urlv['url'],
-        'instagram' => get_field('instagram', $post[0]->ID),
-        'email' => get_field('email', $post[0]->ID),
-        'favicon' => get_field('favicon', $post[0]->ID),
-        'descripcion' => get_field('descripcion', $post[0]->ID),
+        'slug' => $post[0]->post_name,
+        'date' => $post[0]->post_date,
+        'status' => $post[0]->post_status
     );
-    // -----------------------------
-    //     // ACF Gallery plugin
-    //     $posts[$i]->acf_gallery = acf_photo_gallery('fotos', $posts[$i]->ID);
+
+    // TODO: Agregar campos ACF específicos de páginas cuando estén configurados
+    // 'titulo' => get_field('titulo', $post[0]->ID),
+    // 'sub_titulo' => get_field('sub_titulo', $post[0]->ID),
+    // 'instagram' => get_field('instagram', $post[0]->ID),
+    // 'email' => get_field('email', $post[0]->ID),
+
     $res = new WP_REST_Response();
     $res->set_data($fposts);
     $res->set_headers(array('Cache-Control' => 'max-age=3600,public', 'X-Powered-By' => '|=|'));
     return $res;
 }
+
 /**
  * Get posts by category with media
  * 
@@ -145,90 +237,12 @@ function api_posts_by_category(WP_REST_Request $req) {
     // Construccion de la respuesta
     foreach ($posts->posts as $id) {
         // ACF data
-        // 1
-        $media1 = get_field('media_1', $id);
-        $media1_tipo = $media1['tipo'];
-        $media1_media = $media1[$media1_tipo];
-        $media1_url = createSrc($media1_media);
-        $media1_media_v = $media1[$media1_tipo . '_vertical'];
-        $media1_url_v = createSrc($media1_media_v);
-        // 2
-        $media2 = get_field('media_2', $id);
-        $media2_tipo = $media2['tipo'];
-        $media2_media = $media2[$media2_tipo];
-        $media2_url = createSrc($media2_media);
-        $media2_media_v = $media2[$media2_tipo . '_vertical'];
-        $media2_url_v = createSrc($media2_media_v);
-        // 3
-        $media3 = get_field('media_3', $id);
-        $media3_tipo = $media3['tipo'];
-        $media3_media = $media3[$media3_tipo];
-        $media3_url = createSrc($media3_media);
-        $media3_media_v = $media3[$media3_tipo . '_vertical'];
-        $media3_url_v = createSrc($media3_media_v);
-        // 4
-        $media4 = get_field('media_4', $id);
-        $media4_tipo = $media4['tipo'];
-        $media4_media = $media4[$media4_tipo];
-        $media4_url = createSrc($media4_media);
-        $media4_media_v = $media4[$media4_tipo . '_vertical'];
-        $media4_url_v = createSrc($media4_media_v);
-        //$media1_tipo = $media1[]
-        // $media2 = get_field('media_1', $id);
-        // $media3 = get_field('media_1', $id);
-        // $media4 = get_field('media_1', $id);
-        //$tipo = get_field('tipo', $id);
-        //$media = get_field($tipo, $id);
-        // Construccion srcset
-        //$url = createSrc($media);
+        // Obtener datos de ACF
         // ---------
         $fposts['posts'][] = array(
             'title' => get_post_field('post_title', $id),
             'ID' => $id,
-            // 'todos' => array(
-            //     $media1_url['url'],
-            //     $media1_url_v['url'],
-            //     $media2_url['url'],
-            //     $media2_url_v['url'],
-            //     $media3_url['url'],
-            //     $media3_url_v['url'],
-            //     $media4_url['url'],
-            //     $media4_url_v['url'],
-            // ),
-            'media' => array(
-                array(
-                    'tipo' => $media1_tipo,
-                    //'urls' => array(
-                    'url' => $media1_url['url'],
-                    'urlv' => $media1_url_v['url']
-                    //   'srcset' => $media1_url['srcset']
-                    //)
-                ),
-                array(
-                    'tipo' => $media2_tipo,
-                    // 'urls' => array(
-                    'url' => $media2_url['url'],
-                    'urlv' => $media2_url_v['url']
-                    //    'srcset' => $media2_url['srcset']
-                    // )
-                ),
-                array(
-                    'tipo' => $media3_tipo,
-                    //'urls' => array(
-                    'url' => $media3_url['url'],
-                    'urlv' => $media3_url_v['url']
-                    //   'srcset' => $media3_url['srcset']
-                    // )
-                ),
-                array(
-                    'tipo' => $media4_tipo,
-                    // 'urls' => array(
-                    'url' => $media4_url['url'],
-                    'urlv' => $media4_url_v['url']
-                    //   'srcset' => $media4_url['srcset']
-                    // )
-                )
-            ),
+            // Resto de campos
         );
     }
     // -----------------------------
@@ -242,32 +256,44 @@ function api_posts_by_category(WP_REST_Request $req) {
 /**
  * Register Custom REST API Routes
  * 
- * Sets up custom endpoints for the theme's API:
+ * Sets up custom endpoints for the theme's API with security restrictions.
+ * Only these specific routes are allowed, all other WordPress API routes are blocked.
+ * 
+ * Active Routes:
  * - GET /api/v1/pages/{slug} - Get single page by slug
- * - GET /api/v1/posts/{category} - Get posts by category with optional pagination
  * 
  * All endpoints return cached responses (1 hour) and include custom headers.
+ * 
+ * @since 1.0.0
  */
 add_action('rest_api_init', function () {
 
-    // API V1 ------------------------------------------------
-    // (?P<arg>regexp) -> si no coincide devuelve 404
+    /**
+     * Page endpoint
+     * Returns page data by slug from WordPress pages
+     */
     register_rest_route('api/v1', 'pages/(?P<slug>[A-Za-z0-9 \-]+)', array(
         'methods' => 'GET',
         'callback' => 'api_page_by_slug',
+        'args' => array(
+            'slug' => array(
+                'required' => true,
+                'description' => 'Page slug to retrieve',
+                'type' => 'string',
+                'sanitize_callback' => 'sanitize_text_field'
+            ),
+        ),
     ));
-    // si no hay datos devuelve 404
-    register_rest_route('api/v1', '/posts/(?P<category>[A-Za-z0-9 \-]+)', array(
+
+    register_rest_route('api/v1', 'posts/(?P<category>[A-Za-z0-9 \-]+)', array(
         'methods' => 'GET',
         'callback' => 'api_posts_by_category',
         'args' => array(
             'category' => array(
-                'validate_callback' => function ($param, $request, $key) {
-                    // verifca si existen las categorias
-                    $categories = get_categories(array('fields' => 'slugs'));
-                    $cats = explode(",", $param);
-                    return count(array_intersect($cats, $categories)) > 0;
-                }
+                'required' => true,
+                'description' => 'Category slug to retrieve',
+                'type' => 'string',
+                'sanitize_callback' => 'sanitize_text_field'
             ),
         ),
     ));
